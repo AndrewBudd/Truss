@@ -1,0 +1,3 @@
+# Generated artifacts (rebuilt by scripts)
+.truss/deps.yaml
+.truss/stale.yaml

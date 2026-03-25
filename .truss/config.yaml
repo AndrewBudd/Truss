@@ -1,0 +1,22 @@
+# Truss project configuration
+version: "1.0"
+
+# Document kind directories
+kinds:
+  ground: ground/
+  hypothetical: hypothetical/
+  generic: generic/
+
+# Generated artifact paths
+generated:
+  deps: .truss/deps.yaml
+  stale: .truss/stale.yaml
+
+# Validation settings
+validation:
+  # Require evidence on ground documents
+  require_ground_evidence: true
+  # Require assumes on hypothetical documents
+  require_hypothetical_assumes: true
+  # Require parameter on generic documents
+  require_generic_parameter: true
