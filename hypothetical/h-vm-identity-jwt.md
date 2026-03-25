@@ -8,7 +8,7 @@ assumes:
     pin: 9868d04
     note: "Tag-based ACLs determine what scoped identity a VM needs"
   - ref: hypothetical/h-ssh-control-plane.md
-    pin: 0000000
+    pin: 843a628
     note: "Control plane must provision identity tokens at VM boot"
 ---
 

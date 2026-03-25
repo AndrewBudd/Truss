@@ -11,7 +11,7 @@ assumes:
     pin: 9868d04
     note: "Firecracker API constraints shape the migration tooling"
   - ref: hypothetical/h-ssh-control-plane.md
-    pin: 0000000
+    pin: 843a628
     note: "Target architecture uses SSH control plane for VM management"
 ---
 
