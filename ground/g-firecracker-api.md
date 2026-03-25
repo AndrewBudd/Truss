@@ -32,4 +32,3 @@ Firecracker exposes a REST API over a Unix socket for VM lifecycle management.
 - No hot-plug of devices after boot (drives and NICs must be configured before InstanceStart)
 - Rate limiter can be applied per-drive and per-NIC
 - Maximum 32 vCPUs, 256 GiB memory per VM
-- Balloon device support for dynamic memory management (added in v1.6)
