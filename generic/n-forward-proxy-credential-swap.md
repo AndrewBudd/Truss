@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: generic
 id: n-forward-proxy-credential-swap
 title: Forward Proxy Credential Swap Trust Requirements

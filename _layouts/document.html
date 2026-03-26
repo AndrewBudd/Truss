@@ -1,0 +1,71 @@
+---
+layout: default
+---
+
+{% assign kind = page.kind | default: page.doc_kind %}
+
+<div class="document-page kind-{{ kind }}">
+  <a href="{{ '/' | relative_url }}" class="back-link">&larr; Home</a>
+  {% if kind == "ground" %}
+    <a href="{{ '/ground/' | relative_url }}" class="back-link">&larr; Ground Documents</a>
+  {% elsif kind == "hypothetical" %}
+    <a href="{{ '/hypothetical/' | relative_url }}" class="back-link">&larr; Hypothetical Documents</a>
+  {% elsif kind == "generic" %}
+    <a href="{{ '/generic/' | relative_url }}" class="back-link">&larr; Generic Documents</a>
+  {% endif %}
+
+  <div class="document-meta kind-{{ kind }}-meta">
+    <table class="meta-table">
+      <tr><th>Kind</th><td><span class="kind-badge kind-{{ kind }}">{{ kind }}</span></td></tr>
+      <tr><th>ID</th><td><code>{{ page.id_ | default: page.id }}</code></td></tr>
+      <tr><th>Title</th><td>{{ page.title }}</td></tr>
+      <tr><th>Created</th><td>{{ page.created }}</td></tr>
+      {% if page.status %}
+      <tr><th>Status</th><td>{{ page.status }}</td></tr>
+      {% endif %}
+      {% if page.parameter %}
+      <tr><th>Parameter</th><td><em>{{ page.parameter }}</em></td></tr>
+      {% endif %}
+    </table>
+  </div>
+
+  {% if page.assumes %}
+  <div class="document-section assumes-section">
+    <h3>Assumes (Dependencies)</h3>
+    <ul class="assumes-list">
+      {% for dep in page.assumes %}
+        {% assign dep_path = dep.ref | replace: '.md', '.html' %}
+        <li>
+          <a href="{{ dep_path | prepend: '/' | relative_url }}">{{ dep.ref }}</a>
+          <span class="pin-hash" title="Pinned commit hash">pin: <code>{{ dep.pin }}</code></span>
+          {% if dep.note %}
+            <br><span class="dep-note">{{ dep.note }}</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if page.evidence %}
+  <div class="document-section evidence-section">
+    <h3>Evidence</h3>
+    <ul class="evidence-list">
+      {% for ev in page.evidence %}
+        <li>
+          <span class="evidence-type">[{{ ev.type }}]</span>
+          {% if ev.type == "url" %}
+            <a href="{{ ev.ref }}" target="_blank" rel="noopener">{{ ev.ref }}</a>
+          {% else %}
+            {{ ev.ref }}
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="document-body">
+    {{ content }}
+  </div>
+</div>

@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: ground
 id: g-firecracker-api
 title: Firecracker API Surface (v1.6)

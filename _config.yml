@@ -1,0 +1,45 @@
+title: "Truss Knowledge Base"
+description: "A knowledge engineering framework for structuring, validating, and evolving interconnected knowledge artifacts."
+
+remote_theme: just-the-docs/just-the-docs
+
+url: ""
+baseurl: ""
+
+permalink: pretty
+
+exclude:
+  - scripts/
+  - .truss/
+  - Gemfile
+  - Gemfile.lock
+  - LICENSE
+  - vendor/
+
+defaults:
+  - scope:
+      path: "ground"
+    values:
+      layout: document
+      doc_kind: ground
+  - scope:
+      path: "hypothetical"
+    values:
+      layout: document
+      doc_kind: hypothetical
+  - scope:
+      path: "generic"
+    values:
+      layout: document
+      doc_kind: generic
+
+plugins:
+  - jekyll-remote-theme
+
+markdown: kramdown
+
+kramdown:
+  input: GFM
+
+mermaid:
+  version: "10.6.1"

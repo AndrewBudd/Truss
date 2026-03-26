@@ -12,6 +12,10 @@ generated:
   deps: .truss/deps.yaml
   stale: .truss/stale.yaml
 
+# Remote Truss repositories
+# Register with: python3 scripts/truss.py add-remote <name> <url>
+remotes: {}
+
 # Validation settings
 validation:
   # Require evidence on ground documents

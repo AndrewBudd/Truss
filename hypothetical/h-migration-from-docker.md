@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: hypothetical
 id: h-migration-from-docker
 title: Migration Path from Docker to Firecracker

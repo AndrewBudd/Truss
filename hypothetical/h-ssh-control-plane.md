@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: hypothetical
 id: h-ssh-control-plane
 title: SSH as VM Control Plane

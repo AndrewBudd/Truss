@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: hypothetical
 id: h-vm-identity-jwt
 title: JWT-Based VM Identity via Metadata Service

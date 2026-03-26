@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: generic
 id: n-cow-storage-patterns
 title: Copy-on-Write Storage Performance Characteristics

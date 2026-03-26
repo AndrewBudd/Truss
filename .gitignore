@@ -1,3 +1,7 @@
 # Generated artifacts (rebuilt by scripts)
 .truss/deps.yaml
 .truss/stale.yaml
+
+# Jekyll
+_site/
+.jekyll-cache/

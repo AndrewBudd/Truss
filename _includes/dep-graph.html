@@ -1,0 +1,34 @@
+<div class="mermaid">
+graph TD
+    classDef ground fill:#dbeafe,stroke:#2563eb,color:#1e40af
+    classDef hypothetical fill:#fef3c7,stroke:#d97706,color:#92400e
+    classDef generic fill:#d1fae5,stroke:#059669,color:#065f46
+
+    g-tailscale["g-tailscale-acl-model<br/>Tailscale ACL Model"]:::ground
+    g-host["g-host-resources<br/>Host Resource Inventory"]:::ground
+    g-firecracker["g-firecracker-api<br/>Firecracker API Surface"]:::ground
+
+    h-ssh["h-ssh-control-plane<br/>SSH as VM Control Plane"]:::hypothetical
+    h-jwt["h-vm-identity-jwt<br/>JWT-Based VM Identity"]:::hypothetical
+    h-migration["h-migration-from-docker<br/>Migration from Docker"]:::hypothetical
+
+    n-cow["n-cow-storage-patterns<br/>CoW Storage Patterns"]:::generic
+    n-proxy["n-forward-proxy-credential-swap<br/>Forward Proxy Credential Swap"]:::generic
+
+    h-ssh --> g-firecracker
+    h-ssh --> g-host
+    h-jwt --> g-tailscale
+    h-jwt --> h-ssh
+    h-migration --> g-host
+    h-migration --> g-firecracker
+    h-migration --> h-ssh
+
+    click g-tailscale "ground/g-tailscale-acl-model.html"
+    click g-host "ground/g-host-resources.html"
+    click g-firecracker "ground/g-firecracker-api.html"
+    click h-ssh "hypothetical/h-ssh-control-plane.html"
+    click h-jwt "hypothetical/h-vm-identity-jwt.html"
+    click h-migration "hypothetical/h-migration-from-docker.html"
+    click n-cow "generic/n-cow-storage-patterns.html"
+    click n-proxy "generic/n-forward-proxy-credential-swap.html"
+</div>

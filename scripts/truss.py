@@ -8,11 +8,15 @@ Commands:
     validate      Validate documents against kind-specific rules
     resolve       Interactive resolution workflow for stale documents
     new           Create a new document with proper frontmatter
+    add-remote    Register a remote Truss repository
+    list-remotes  List registered remote Truss repositories
+    init          Initialize a new Truss project
 """
 
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -52,15 +56,141 @@ def git_diff(root: Path, old_hash: str, filepath: str) -> str:
     return result.stdout
 
 
+def load_config(root: Path) -> dict:
+    """Load .truss/config.yaml as a simple dict (minimal YAML parser)."""
+    config_path = root / ".truss" / "config.yaml"
+    if not config_path.exists():
+        return {}
+
+    config = {}
+    text = config_path.read_text(encoding="utf-8")
+    current_section = None
+    current_dict = {}
+
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Top-level key with a mapping value (ends with : and no value, or {})
+        if not line.startswith(" ") and ":" in stripped:
+            key, _, val = stripped.partition(":")
+            key = key.strip()
+            val = val.strip()
+
+            if val == "{}" or val == "":
+                # Start of a section or empty dict
+                if current_section and current_dict:
+                    config[current_section] = current_dict
+                    current_dict = {}
+                current_section = key
+                if val == "{}":
+                    config[key] = {}
+                    current_section = None
+                continue
+            else:
+                if current_section and current_dict:
+                    config[current_section] = current_dict
+                    current_dict = {}
+                    current_section = None
+                config[key] = val.strip('"').strip("'")
+                continue
+
+        # Nested key within a section
+        if current_section and line.startswith("  ") and ":" in stripped:
+            key, _, val = stripped.partition(":")
+            key = key.strip()
+            val = val.strip().strip('"').strip("'")
+            current_dict[key] = val
+
+    if current_section:
+        if current_dict:
+            config[current_section] = current_dict
+        elif current_section not in config:
+            config[current_section] = {}
+
+    return config
+
+
+def save_config(root: Path, config: dict):
+    """Write config back to .truss/config.yaml."""
+    config_path = root / ".truss" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = ["# Truss project configuration"]
+
+    # Write version
+    if "version" in config:
+        lines.append(f'version: "{config["version"]}"')
+        lines.append("")
+
+    # Write kinds
+    if "kinds" in config:
+        lines.append("# Document kind directories")
+        lines.append("kinds:")
+        for k, v in config["kinds"].items():
+            lines.append(f"  {k}: {v}")
+        lines.append("")
+
+    # Write generated
+    if "generated" in config:
+        lines.append("# Generated artifact paths")
+        lines.append("generated:")
+        for k, v in config["generated"].items():
+            lines.append(f"  {k}: {v}")
+        lines.append("")
+
+    # Write remotes
+    lines.append("# Remote Truss repositories")
+    lines.append("# Register with: python3 scripts/truss.py add-remote <name> <url>")
+    remotes = config.get("remotes", {})
+    if remotes:
+        lines.append("remotes:")
+        for name, url in remotes.items():
+            lines.append(f"  {name}: \"{url}\"")
+    else:
+        lines.append("remotes: {}")
+    lines.append("")
+
+    # Write validation
+    if "validation" in config:
+        lines.append("# Validation settings")
+        lines.append("validation:")
+        for k, v in config["validation"].items():
+            lines.append(f"  # {k.replace('_', ' ').title()}")
+            lines.append(f"  {k}: {v}")
+        lines.append("")
+
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# External reference detection
+# ---------------------------------------------------------------------------
+
+EXTERNAL_URL_RE = re.compile(r"^https?://")
+EXTERNAL_SHORTHAND_RE = re.compile(r"^@([^/]+)/(.+)$")
+
+
+def is_external_ref(ref_str: str) -> bool:
+    """Return True if a reference points to an external Truss repository."""
+    if EXTERNAL_URL_RE.match(ref_str):
+        return True
+    if EXTERNAL_SHORTHAND_RE.match(ref_str):
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Reference:
-    ref: str        # e.g. "ground/g-foo.md"
+    ref: str        # e.g. "ground/g-foo.md" or "@other-truss/ground/g-foo.md"
     pin: str = ""   # commit hash
     note: str = ""
+    repo: str = ""  # optional repo URL for shorthand external refs
 
 
 @dataclass
@@ -134,7 +264,7 @@ def parse_frontmatter(filepath: Path, relpath: str) -> Document:
                 current_block = "evidence"
                 current_ref = None
                 continue
-            elif key not in ("ref", "pin", "note", "type"):
+            elif key not in ("ref", "pin", "note", "type", "repo"):
                 # Unknown top-level key resets block context
                 current_block = None
                 current_ref = None
@@ -170,6 +300,8 @@ def parse_frontmatter(filepath: Path, relpath: str) -> Document:
                     current_ref.pin = val
                 elif key == "note":
                     current_ref.note = val
+                elif key == "repo":
+                    current_ref.repo = val
 
     # Flush last ref
     if current_ref is not None and current_ref.ref:
@@ -191,18 +323,33 @@ def find_documents(root: Path) -> list[Document]:
         for mdfile in sorted(dirpath.glob("*.md")):
             relpath = str(mdfile.relative_to(root))
             doc = parse_frontmatter(mdfile, relpath)
+            # Skip non-Truss files (e.g. Jekyll index pages)
+            if not doc.kind and mdfile.name == "index.md":
+                continue
             docs.append(doc)
     return docs
 
 
 def internal_refs(doc: Document) -> list[Reference]:
-    """Return all references that point to internal Truss documents."""
+    """Return all references that point to local Truss documents."""
     refs = []
     for r in doc.assumes:
-        if INTERNAL_REF_RE.match(r.ref):
+        if INTERNAL_REF_RE.match(r.ref) and not is_external_ref(r.ref):
             refs.append(r)
     for r in doc.evidence:
-        if INTERNAL_REF_RE.match(r.ref):
+        if INTERNAL_REF_RE.match(r.ref) and not is_external_ref(r.ref):
+            refs.append(r)
+    return refs
+
+
+def external_refs(doc: Document) -> list[Reference]:
+    """Return all references that point to external Truss repositories."""
+    refs = []
+    for r in doc.assumes:
+        if is_external_ref(r.ref):
+            refs.append(r)
+    for r in doc.evidence:
+        if is_external_ref(r.ref):
             refs.append(r)
     return refs
 
@@ -249,6 +396,7 @@ def cmd_detect_stale(args):
     """Identify documents with out-of-date pinned references."""
     root = repo_root()
     docs = find_documents(root)
+    check_remote = getattr(args, "remote", False)
 
     @dataclass
     class StaleEntry:
@@ -256,11 +404,13 @@ def cmd_detect_stale(args):
         dependency: str
         pinned_hash: str
         current_hash: str
-        status: str  # "stale" or "missing"
+        status: str  # "stale", "missing", or "external"
 
     stale_entries: list[StaleEntry] = []
+    skipped_external = 0
 
     for doc in docs:
+        # Check local refs as before
         for ref in internal_refs(doc):
             if not ref.pin:
                 continue
@@ -269,6 +419,20 @@ def cmd_detect_stale(args):
                 stale_entries.append(StaleEntry(doc.path, ref.ref, ref.pin, "(missing)", "missing"))
             elif not current.startswith(ref.pin) and not ref.pin.startswith(current):
                 stale_entries.append(StaleEntry(doc.path, ref.ref, ref.pin, current, "stale"))
+
+        # Handle external refs
+        ext_refs = external_refs(doc)
+        if ext_refs and not check_remote:
+            skipped_external += len(ext_refs)
+        elif ext_refs and check_remote:
+            for ref in ext_refs:
+                if not ref.pin:
+                    continue
+                # For remote checking, we note these as external but cannot
+                # verify without cloning the remote repo
+                stale_entries.append(
+                    StaleEntry(doc.path, ref.ref, ref.pin, "(remote — not verified)", "external")
+                )
 
     # Write stale.yaml
     stale_path = root / ".truss" / "stale.yaml"
@@ -295,6 +459,9 @@ def cmd_detect_stale(args):
 
     print(f"Staleness check complete: {len(stale_entries)} stale reference(s) found.")
     print(f"Results written to {stale_path}")
+
+    if skipped_external:
+        print(f"Skipped {skipped_external} external reference(s). Use --remote to include them.")
 
     if stale_entries:
         print()
@@ -356,7 +523,7 @@ def cmd_validate(args):
                 error(doc.path, "Ground document must not have 'assumes'")
             # Check for internal refs in evidence
             for ref in doc.evidence:
-                if INTERNAL_REF_RE.match(ref.ref):
+                if INTERNAL_REF_RE.match(ref.ref) and not is_external_ref(ref.ref):
                     error(doc.path, f"Ground document references internal doc {ref.ref} as evidence")
 
         elif doc.kind == "hypothetical":
@@ -367,14 +534,20 @@ def cmd_validate(args):
             if not doc.parameter:
                 warn(doc.path, "Generic document has no 'parameter' field")
 
-        # Check that referenced files exist
+        # Check that local referenced files exist (skip external refs)
         for ref in internal_refs(doc):
             ref_path = root / ref.ref
             if not ref_path.exists():
                 error(doc.path, f"Referenced file does not exist: {ref.ref}")
 
+        # Report external refs as info (not errors)
+        ext = external_refs(doc)
+        if ext:
+            for ref in ext:
+                print(f"  \033[0;36mINFO:\033[0m External ref: {ref.ref} (pin: {ref.pin or 'none'})")
+
     print()
-    print("━" * 40)
+    print("\u2501" * 40)
     print(f"Checked: {len(docs)} documents")
     print(f"Errors:  \033[0;31m{errors}\033[0m")
     print(f"Warnings: \033[1;33m{warnings}\033[0m")
@@ -446,7 +619,8 @@ def cmd_resolve(args):
 
     for doc_path in order:
         infos = stale_map[doc_path]
-        print(f"\033[1;33m{'━' * 55}\033[0m")
+        separator = '\u2501' * 55
+        print(f"\033[1;33m{separator}\033[0m")
         print(f"Resolving: \033[0;34m{doc_path}\033[0m")
         for info in infos:
             print(f"  Stale dep: {info.dependency} (pinned: {info.pinned_hash}, current: {info.current_hash})")
@@ -570,7 +744,7 @@ def repin_document(root: Path, doc_path: str):
             continue
 
         # Non-blank, non-continuation line clears pending ref
-        if line.strip() and not re.match(r"^\s+(pin|note|type):", line):
+        if line.strip() and not re.match(r"^\s+(pin|note|type|repo):", line):
             pending_ref = None
 
         result.append(line)
@@ -651,6 +825,157 @@ def cmd_new(args):
     print(f"Created {filepath.relative_to(root)}")
 
 
+def cmd_add_remote(args):
+    """Register a remote Truss repository in .truss/config.yaml."""
+    root = repo_root()
+    config = load_config(root)
+
+    remotes = config.get("remotes", {})
+    if isinstance(remotes, str) and remotes == "":
+        remotes = {}
+    remotes[args.name] = args.url
+    config["remotes"] = remotes
+
+    save_config(root, config)
+    print(f"Remote '{args.name}' registered: {args.url}")
+
+
+def cmd_list_remotes(args):
+    """List registered remote Truss repositories."""
+    root = repo_root()
+    config = load_config(root)
+
+    remotes = config.get("remotes", {})
+    if not remotes or (isinstance(remotes, str) and remotes == ""):
+        print("No remotes registered.")
+        print("Add one with: python3 scripts/truss.py add-remote <name> <url>")
+        return
+
+    print("Registered remotes:")
+    for name, url in remotes.items():
+        print(f"  {name}: {url}")
+
+
+def cmd_init(args):
+    """Initialize a new Truss project."""
+    project_name = args.name
+    target = Path(args.name).resolve()
+
+    if target.exists():
+        print(f"Error: directory '{project_name}' already exists.")
+        sys.exit(1)
+
+    # Determine the source template directory (this repo)
+    script_dir = Path(__file__).resolve().parent
+    template_root = script_dir.parent
+
+    print(f"Initializing new Truss project: {project_name}")
+
+    # Create project directory
+    target.mkdir(parents=True)
+
+    # Copy framework files
+    # scripts/
+    scripts_dst = target / "scripts"
+    scripts_dst.mkdir()
+    shutil.copy2(template_root / "scripts" / "truss.py", scripts_dst / "truss.py")
+
+    # .truss/config.yaml (fresh, with no sample data)
+    truss_dir = target / ".truss"
+    truss_dir.mkdir()
+    config_content = textwrap.dedent("""\
+        # Truss project configuration
+        version: "1.0"
+
+        # Document kind directories
+        kinds:
+          ground: ground/
+          hypothetical: hypothetical/
+          generic: generic/
+
+        # Generated artifact paths
+        generated:
+          deps: .truss/deps.yaml
+          stale: .truss/stale.yaml
+
+        # Remote Truss repositories
+        # Register with: python3 scripts/truss.py add-remote <name> <url>
+        remotes: {}
+
+        # Validation settings
+        validation:
+          # Require evidence on ground documents
+          require_ground_evidence: true
+          # Require assumes on hypothetical documents
+          require_hypothetical_assumes: true
+          # Require parameter on generic documents
+          require_generic_parameter: true
+    """)
+    (truss_dir / "config.yaml").write_text(config_content, encoding="utf-8")
+
+    # .gitignore
+    gitignore_content = textwrap.dedent("""\
+        # Generated artifacts (rebuilt by scripts)
+        .truss/deps.yaml
+        .truss/stale.yaml
+    """)
+    (target / ".gitignore").write_text(gitignore_content, encoding="utf-8")
+
+    # Create kind directories with .gitkeep
+    for kind_dir in ("ground", "hypothetical", "generic"):
+        d = target / kind_dir
+        d.mkdir()
+        (d / ".gitkeep").write_text("", encoding="utf-8")
+
+    # README
+    readme_content = textwrap.dedent(f"""\
+        # {project_name}
+
+        A knowledge base built with the [Truss](https://github.com/your-org/Truss) framework.
+
+        ## Quick Start
+
+        ```bash
+        # Create documents
+        python3 scripts/truss.py new ground g-example "Example Ground Document"
+        python3 scripts/truss.py new hypothetical h-example "Example Hypothesis"
+
+        # Validate all documents
+        python3 scripts/truss.py validate
+
+        # Build the reverse dependency index
+        python3 scripts/truss.py build-deps
+
+        # Detect stale references
+        python3 scripts/truss.py detect-stale
+        ```
+
+        ## Document Kinds
+
+        | Kind | Directory | Answers |
+        |------|-----------|---------|
+        | **Ground** | `ground/` | "What is the case?" |
+        | **Hypothetical** | `hypothetical/` | "What follows from what we know?" |
+        | **Generic** | `generic/` | "What is generally true about things like this?" |
+    """)
+    (target / "README.md").write_text(readme_content, encoding="utf-8")
+
+    # Initialize git and make initial commit
+    subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(target), "commit", "-m", "Initialize Truss project"],
+        check=True, capture_output=True,
+    )
+
+    print(f"Truss project created at: {target}")
+    print(f"  {len(list(target.rglob('*')))} files committed.")
+    print()
+    print("Next steps:")
+    print(f"  cd {project_name}")
+    print("  python3 scripts/truss.py new ground g-example \"My First Ground Document\"")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -666,12 +991,21 @@ def main():
               validate       Validate all documents against kind-specific rules
               resolve        Interactive resolution workflow for stale documents
               new            Create a new document with proper frontmatter
+              add-remote     Register a remote Truss repository
+              list-remotes   List registered remote Truss repositories
+              init           Initialize a new Truss project from template
         """),
     )
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("build-deps", help="Build reverse dependency index")
-    sub.add_parser("detect-stale", help="Detect stale pinned references")
+
+    stale_parser = sub.add_parser("detect-stale", help="Detect stale pinned references")
+    stale_parser.add_argument(
+        "--remote", action="store_true", default=False,
+        help="Include external (cross-repo) references in staleness check",
+    )
+
     sub.add_parser("validate", help="Validate all documents")
     sub.add_parser("resolve", help="Interactive stale resolution workflow")
 
@@ -679,6 +1013,15 @@ def main():
     new_parser.add_argument("kind", choices=["ground", "hypothetical", "generic"])
     new_parser.add_argument("id", help="Document ID (e.g., g-api-shape)")
     new_parser.add_argument("title", help="Document title")
+
+    remote_parser = sub.add_parser("add-remote", help="Register a remote Truss repo")
+    remote_parser.add_argument("name", help="Short name for the remote (e.g., infra-truss)")
+    remote_parser.add_argument("url", help="Git URL of the remote Truss repo")
+
+    sub.add_parser("list-remotes", help="List registered remote Truss repos")
+
+    init_parser = sub.add_parser("init", help="Initialize a new Truss project")
+    init_parser.add_argument("name", help="Project name (creates a new directory)")
 
     args = parser.parse_args()
 
@@ -692,6 +1035,9 @@ def main():
         "validate": cmd_validate,
         "resolve": cmd_resolve,
         "new": cmd_new,
+        "add-remote": cmd_add_remote,
+        "list-remotes": cmd_list_remotes,
+        "init": cmd_init,
     }
     commands[args.command](args)
 

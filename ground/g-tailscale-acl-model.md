@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: ground
 id: g-tailscale-acl-model
 title: Tailscale ACL Model and Tag-Based Access

@@ -1,4 +1,5 @@
 ---
+layout: document
 kind: ground
 id: g-host-resources
 title: Bare-Metal Host Resource Inventory
